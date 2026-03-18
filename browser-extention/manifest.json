@@ -1,0 +1,31 @@
+{
+    "manifest_version": 3,
+    "name": "Craw Data Project",
+    "version": "1.0.0",
+    "description": "Du an de lay du lieu tu trong web",
+    "permissions":
+    [
+        "activeTab",
+        "scripting",
+        "storage",
+        "tabs"
+    ],
+    "host_permissions": [
+        "https://etsy.toidispy.com/*",
+        "http://localhost:3000/*"
+    ],
+    "background": {
+        "service_worker" : "background/background.js",
+        "type":"module"
+    },
+    "content_scripts": [
+        {
+            "matches": ["https://etsy.toidispy.com/*"],
+            "js": ["content/content.js"]
+        }
+    ],
+    "action" : {
+        "default_title": "Craw Data Project",
+        "default_popup": "popup/popup.html"
+    }
+}
