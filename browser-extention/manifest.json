@@ -12,7 +12,8 @@
     ],
     "host_permissions": [
         "https://etsy.toidispy.com/*",
-        "http://localhost:3000/*"
+        "http://localhost:3000/*",
+        "https://es-api.toidispy.com/*"
     ],
     "background": {
         "service_worker" : "background/background.js",
@@ -20,7 +21,7 @@
     },
     "content_scripts": [
         {
-            "matches": ["https://etsy.toidispy.com/*"],
+            "matches": ["https://etsy.toidispy.com/*", "https://etsy.toidispy.com/listings?*"],
             "js": ["content/content.js"]
         }
     ],

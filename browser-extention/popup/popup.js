@@ -1,99 +1,52 @@
-document.addEventListener("DOMContentLoaded", () => {
-    const countInput = document.getElementById("craw-countThumb");
-    const crawlBtn = document.getElementById("craw-button");
-    const statusText = document.getElementById("craw-status");
-    const MAX = 9999;
+const crawlBtn = document.getElementById("craw-button");
+const crawlInput = document.getElementById("craw-input")
+const statusText = document.getElementById("craw-status");
 
-    if (!countInput || !crawlBtn || !statusText) {
-        console.error("Popup elements not found");
+function sendMessagePromise(message) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tabs[0]) return reject(new Error("No active tab"));
+            if (!tabs[0].url.startsWith("https://etsy.toidispy.com/listings")) {
+                return reject(new Error("Please navigate to https://etsy.toidispy.com/ to use this extension."));
+            }
+            chrome.tabs.sendMessage(tabs[0].id, message, (res) => {
+                if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
+                resolve(res);
+            });
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+crawlBtn.addEventListener("click", async() => {
+    const count = parseInt(crawlInput.value);
+    if (!count || count <= 0) {
+        statusText.textContent = "Status: Please enter a valid number!";
         return;
     }
 
-    chrome.runtime.onMessage.addListener((message) => {
-        if (!message || !message.type) return;
-
-        if (message.type === "CRAWL_ERROR") {
-            console.error("Crawl error:", message.error);
-            statusText.textContent = "Crawl error!";
-            crawlBtn.disabled = false;
-        }
-
-        if (message.type === "PRODUCT_PROGRESS") {
-            statusText.textContent = `Collected: ${message.total}`;
-        }
-
-        if (message.type === "CRAWL_FINISHED") {
-            statusText.textContent = "Crawling Successfully";
-            crawlBtn.disabled = false;
-        }
-    });
-    
-    crawlBtn.addEventListener("click", async () => {
-        let count = parseInt(countInput.value);
-
-        if (isNaN(count) || count <= 0) {
-            statusText.textContent = "Please enter a valid number";
-            return;
-        }
-
-        if (count > MAX) count = MAX;
-
-        statusText.textContent = `Status: crawling products 0 -> ${count}`;
+    try {
         crawlBtn.disabled = true;
-
-        try {
-            const tabs = await chrome.tabs.query({
-                active: true,
-                currentWindow: true
-            });
-
-            if (!tabs || tabs.length === 0) {
-                statusText.textContent = "No active tab";
-                crawlBtn.disabled = false;
-                return;
-            }
-
-            const tab = tabs[0];
-            const url = new URL(tab.url);
-
-            if (url.hostname !== "etsy.toidispy.com") {
-                statusText.textContent = "Please open an Etsy page first";
-                crawlBtn.disabled = false;
-                return;
-            }
-
-            chrome.runtime.sendMessage({
-                type: "START_CRAWL",
-                delay: 500,
-                count: count,
-                tabId: tab.id
-            }, (response) => {
-
-                if (chrome.runtime.lastError) {
-                    console.error(chrome.runtime.lastError);
-                    statusText.textContent = "Cannot connect to background";
-                    crawlBtn.disabled = false;
-                    return;
-                }
-
-                if (!response) {
-                    statusText.textContent = "No response from background";
-                    crawlBtn.disabled = false;
-                    return;
-                }
-
-                if (response.success) {
-                    statusText.textContent = "Crawl started...";
-                } else {
-                    statusText.textContent = "Crawl failed!";
-                    crawlBtn.disabled = false;
-                }
-            });
-
-        } catch (error) {
-            console.error(error);
-            statusText.textContent = "Error Happened";
-            crawlBtn.disabled = false;
+        statusText.textContent = "Status: Crawling...";
+        const res = await sendMessagePromise({
+            type : "FETCH_PRODUCTS",
+            count,
+        });
+        if (!res || !res.success) {
+            const errorMessage = res?.error?.message || res?.error || "Unknow error";
+            throw new Error(errorMessage);
         }
-    });
-});
+        console.log("RESULT:", res);
+
+        const products = res.products || [];
+        statusText.textContent = `Status: Done(${products.length || 0} products)`;
+    } catch (error) {
+        console.error(error);
+        statusText.textContent = `Status: Error - ${error.message || 'Unknown error'}`;
+    }
+    finally {
+        crawlBtn.disabled = false;
+    }
+    
+})
