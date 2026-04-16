@@ -1,0 +1,76 @@
+{
+    "version": "1.0",
+    "site": {
+        "baseUrl": "https://etsy.toidispy.com",
+        "listingUrl": "https://etsy.toidispy.com/listings"
+    },
+    "pageDetection": {
+        "listingUrlIncludes": "/listings"
+    },
+    "listing": {
+        "readySelectors": [
+            "a.text-secondary.fs-13"
+        ],
+        "productCard": [
+            ".p-item-col"
+        ],
+        "productClickable": [
+            ".p-picture .position-absolute.top-0.start-0.h-100.w-100.z-1",
+            ".p-picture .p-carousel-item-img",
+            ".p-picture"
+        ],
+        "productName": [
+            "a.text-secondary.fs-13"
+        ],
+        "price": [
+            ".shadow.rounded-pill.bg-info-subtle.py-1.px-2"
+        ],
+        "nextButton": [
+            ".pagination .page-link[rel='next']",
+            ".pagination-next",
+            "button[aria-label='Next']"
+        ]
+    },
+    "detailModal": {
+        "root": [
+            "#listingModal"
+        ],
+        "shopName": [
+            "#listingModal .modal-shop .fw-semibold a.text-etsy",
+            "#listingModal .modal-shop .fw-semibold a"
+        ],
+        "shopLink": [
+            "#listingModal .modal-shop .fw-semibold a.text-etsy",
+            "#listingModal .modal-shop .fw-semibold a"
+        ],
+        "mainImage": [
+            "#listingModal .tmodal-img-large img.modal-img"
+        ],
+        "listingLink": [
+            "#listingModal a[href*='/redirect/listing']"
+        ],
+        "shopRedirectLink": [
+            "#listingModal a[href*='/redirect/app']",
+            "#listingModal a[href*='redirect/shop']"
+        ],
+        "price": [
+            "#listingModal .bg-info-subtle span:nth-child[3]"
+        ],
+        "breadcrumbLinks": [
+            "#listingModal li.breadcrumb-item a"
+        ],
+        "sold": [
+            "#listingModal [data-name='shopping-bag'] + span",
+            "#listingModal .vue-feather--shopping-bag + span"
+        ],
+        "productName": [
+            "#listingModal .mx-3.border.px-3.py-2.mt-3.rounded-sm .fs-14.pt-2 span",
+            "#listingModal .fs-14.pt-2 span"
+        ],
+        "closeButton": [
+            "#listingModal .position-absolute.end-0.top-0 button",
+            "#listingModal .d-md-none button",
+            "#listingModal button"
+        ]
+    }
+}

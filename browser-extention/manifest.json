@@ -6,13 +6,13 @@
     "permissions":
     [
         "activeTab",
-        "scripting",
         "storage",
         "tabs"
     ],
     "host_permissions": [
         "https://etsy.toidispy.com/*",
-        "http://localhost:3000/*"
+        "http://localhost:3000/*",
+        "https://fthzm2m3h3.execute-api.ap-southeast-1.amazonaws.com/*"
     ],
     "background": {
         "service_worker" : "background/background.js",
