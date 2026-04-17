@@ -54,7 +54,8 @@
             "#listingModal a[href*='redirect/shop']"
         ],
         "price": [
-            "#listingModal .bg-info-subtle span:nth-child[3]"
+            "#listingModal .bg-info-subtle span:nth-child(3)",
+            "#listingModal .bg-info-subtle span.col"
         ],
         "breadcrumbLinks": [
             "#listingModal li.breadcrumb-item a"

@@ -171,6 +171,8 @@ class DetailExtractor:
         price = self._safe_text_from_page(
             self._selectors("detailModal", "price")
         )
+        if price:
+            price = price.replace("Price","").strip()
         shop_name = self._safe_text_from_page(
             self._selectors("detailModal", "shopName")
         )

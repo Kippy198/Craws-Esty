@@ -1,19 +1,18 @@
 from __future__ import annotations
-#tạo luồng chạy song song
-import threading 
-import time
+
+import threading
 import uuid
-from typing import Any, Dict, Literal, Optional #Khai báo dữ liệu
+from typing import Any, Dict, Literal, Optional
 
-from fastapi import FastAPI, Header,HTTPException #Framework API chính
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, field_validator
 
-from pydantic import BaseModel, Field, field_validator # Validate dữ liệu đầu vào
+from main import run_crawl
+from models import CrawlOptions
 
-from crawler import crawl_products
-
-app = FastAPI(title="Crawl Backend") #Tạo ứng dụng FastAPi
-JobStatus = Literal["queued", "running","done","error"] #trạng thái
+app = FastAPI(title="Crawl Backend")
+JobStatus = Literal["queued", "running", "done", "error"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +23,7 @@ app.add_middleware(
 )
 
 class StartCrawRequest(BaseModel):
-    url: str = Field(...,min_length=1)
+    url: str = Field(..., min_length=1)
     count: Optional[int] = Field(default=None)
 
     @field_validator("url")
@@ -46,30 +45,34 @@ class StartCrawRequest(BaseModel):
 
 class JobState(BaseModel):
     jobId: str
+    status: JobStatus = "queued"
     targetCount: int = 0
     crawledCount: int = 0
-    uploadedCount: int = 0
-    uploadTotal: int = 0
-    queuedProducts: int = 0
-    estimatedMinutes: int = 0
+    validCount: int = 0
+    invalidCount: int = 0
+    duplicateCount: int = 0
+    scrollRounds: int = 0
     done: bool = False
     errorMessage: str = ""
+    stopReason: str = ""
     products: list[dict[str, Any]] = Field(default_factory=list)
 
-jobs_store: Dict[str, Dict[str,Any]] = {}
+jobs_store: Dict[str, Dict[str, Any]] = {}
 jobs_lock = threading.Lock()
 
 def make_default_job(job_id: str, target_count: int) -> Dict[str, Any]:
     return {
         "jobId": job_id,
+        "status": "queued",
         "targetCount": target_count,
         "crawledCount": 0,
-        "uploadedCount": 0,
-        "uploadTotal": 0,
-        "queuedProducts": 0,
-        "estimatedMinutes": 0,
+        "validCount": 0,
+        "invalidCount": 0,
+        "duplicateCount": 0,
+        "scrollRounds": 0,
         "done": False,
         "errorMessage": "",
+        "stopReason": "",
         "products": [],
     }
 
@@ -77,17 +80,18 @@ def get_job_or_404(job_id: str) -> Dict[str, Any]:
     with jobs_lock:
         job = jobs_store.get(job_id)
         if not job:
-            raise HTTPException(status_code=404, detail = 'Cant find a Job' )
+            raise HTTPException(status_code=404, detail="Cant find a Job")
         return dict(job)
 
-def update_job(job_id: str, patch:Dict[str,Any]) -> None:
+
+def update_job(job_id: str, patch: Dict[str, Any]) -> None:
     with jobs_lock:
-        if job_id not in job_store:
+        if job_id not in jobs_store:
             return
         jobs_store[job_id].update(patch)
 
 def require_bearer_token(authorization: Optional[str]) -> str:
-    if not authorization: 
+    if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization")
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
@@ -98,52 +102,55 @@ def require_bearer_token(authorization: Optional[str]) -> str:
 
     return token
 
-def run_crawl_job(job_id: str, url: str, count: Optional[int]) -> None: 
-    try: 
-        def on_progess(snapshot: Dict[str,Any]) -> None:
-            update_job(job_id, snapshot)
-        
-        result = crawl_products(
-            url=url,
-            count=count,
-            job_id=job_id,
-            config_path="selector-config.json",
-            headless=True,
-            progress_callback=on_progess,
+def run_crawl_job(job_id: str, url: str, count: Optional[int]) -> None:
+    try:
+        update_job(job_id, {"status": "running"})
+
+        options = CrawlOptions(
+            max_items=count,
+            connect_url="http://127.0.0.1:9222",
+            output_path=f"output/{job_id}_products.json",
         )
 
+        result = run_crawl(options)
+
         final_patch = {
-            "jobId": job_id,
-            "targetCount": int(result.get("targetCount") or 0),
-            "crawledCount": int(result.get("crawledCount") or 0),
-            "uploadedCount": int(result.get("uploadedCount") or 0),
-            "uploadTotal": int(result.get("uploadTotal") or 0),
-            "queuedProducts": int(result.get("queuedProducts") or 0),
-            "estimatedMinutes": int(result.get("estimatedMinutes") or 0),
-            "done": bool(result.get("done")),
-            "errorMessage": str(result.get("errorMessage") or ""),
-            "products": result.get("products") or [],
+            "status": "done",
+            "targetCount": int(result.stats.requested_count or 0),
+            "crawledCount": int(result.stats.scanned_card_count or 0),
+            "validCount": int(result.stats.valid_count or 0),
+            "invalidCount": int(result.stats.invalid_count or 0),
+            "duplicateCount": int(result.stats.duplicate_count or 0),
+            "scrollRounds": int(result.stats.scroll_rounds or 0),
+            "done": True,
+            "errorMessage": "",
+            "stopReason": str(result.stats.stop_reason or ""),
+            "products": [item.to_dict() for item in result.items],
         }
         update_job(job_id, final_patch)
+
     except Exception as exc:
         update_job(
             job_id,
             {
+                "status": "error",
                 "done": False,
                 "errorMessage": str(exc),
             },
         )
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
 
 @app.post("/api/crawl/start")
 def start_crawl(
     payload: StartCrawRequest,
     authorization: Optional[str] = Header(default=None)
 ) -> Dict[str, Any]:
-    
     require_bearer_token(authorization)
+
     job_id = uuid.uuid4().hex
     target_count = 0 if payload.count is None else int(payload.count)
 
@@ -155,7 +162,6 @@ def start_crawl(
         args=(job_id, payload.url, payload.count),
         daemon=True,
     )
-
     worker.start()
 
     return {
@@ -163,12 +169,11 @@ def start_crawl(
         "targetCount": target_count,
     }
 
+
 @app.get("/api/crawl/jobs/{job_id}")
 def get_crawl_job_status(
     job_id: str,
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     require_bearer_token(authorization)
-
     return get_job_or_404(job_id)
-    

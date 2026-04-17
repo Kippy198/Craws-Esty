@@ -1,20 +1,59 @@
 from __future__ import annotations
 
 from typing import Optional
+import subprocess
+import time
+
+import requests
 from playwright.sync_api import Browser, Page, sync_playwright
 
-from config import(
+from config import (
     get_listing_url,
     get_listing_url_match,
     get_site_base_url,
     load_selector_config,
 )
-
 from detail_extractor import DetailExtractor
 from listing_crawler import ListingCrawler
-from models import CrawlOptions,CrawlResult
+from models import CrawlOptions, CrawlResult
 from transformer import transform_raw_to_record
 from utils import build_fingerprint, save_json
+
+
+# 0. Browser helpers
+
+def ensure_browser_running(connect_url: str) -> None:
+    debug_url = connect_url.rstrip("/")
+
+    try:
+        requests.get(f"{debug_url}/json/version", timeout=2)
+        return
+    except Exception:
+        pass
+
+    print("[BROWSER] Chrome chưa chạy, đang mở...")
+    chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    user_data_dir = r"C:\crawler-profile"
+
+    subprocess.Popen(
+        [
+            chrome_path,
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={user_data_dir}",
+            "--no-first-run",
+        ]
+    )
+
+    for _ in range(30):
+        try:
+            requests.get(f"{debug_url}/json/version", timeout=2)
+            print("[BROWSER] Chrome debug đã sẵn sàng")
+            return
+        except Exception:
+            time.sleep(1)
+
+    raise RuntimeError("Chrome không mở được debug port")
+
 
 def pick_existing_page(browser: Browser, preferred_base_url: str) -> Optional[Page]:
     for context in browser.contexts:
@@ -25,45 +64,225 @@ def pick_existing_page(browser: Browser, preferred_base_url: str) -> Optional[Pa
                     return page
             except Exception:
                 continue
+
     for context in browser.contexts:
         for page in context.pages:
             return page
-    
+
     return None
 
-def is_listing_page(url: str, listing_url_match: str ) -> bool:
+
+def ensure_page(browser: Browser, preferred_base_url: str) -> Page:
+    page = pick_existing_page(browser, preferred_base_url)
+    if page is not None:
+        return page
+
+    if not browser.contexts:
+        context = browser.new_context()
+    else:
+        context = browser.contexts[0]
+
+    page = context.new_page()
+    print("[BROWSER] Chưa có tab nào, đã tự tạo tab mới")
+    return page
+
+
+def is_listing_page(url: str, listing_url_match: str) -> bool:
     if not url or not listing_url_match:
         return False
     return listing_url_match in url
+
+
+def is_logged_out(url: str) -> bool:
+    if not url:
+        return False
+    return "toidispy.com/login" in url and "app_id=" in url
+
+
+def wait_until_user_ready(
+    page: Page,
+    listing_url: str,
+    listing_url_match: str,
+    timeout_seconds: int = 300,
+    poll_seconds: int = 2,
+) -> bool:
+    print("[WAIT] Đang chờ bạn đăng nhập và vào trang listings...")
+    print(f"[WAIT] Nếu cần, hãy mở trang này sau khi login: {listing_url}")
+
+    deadline = time.time() + timeout_seconds
+    last_logged_url = ""
+
+    while time.time() < deadline:
+        current_url = page.url or ""
+
+        if current_url != last_logged_url:
+            print(f"[WAIT] Current URL: {current_url or 'about:blank'}")
+            last_logged_url = current_url
+
+        if is_listing_page(current_url, listing_url_match):
+            print("[WAIT] Đã vào đúng listing page, bắt đầu crawl")
+            return True
+
+        if current_url in ("", "about:blank"):
+            try:
+                page.goto(listing_url, wait_until="domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+        elif is_logged_out(current_url):
+            # Đang ở login, tiếp tục chờ user thao tác.
+            pass
+        elif listing_url and "toidispy.com" in current_url and not is_listing_page(current_url, listing_url_match):
+            try:
+                page.goto(listing_url, wait_until="domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+
+        time.sleep(poll_seconds)
+
+    raise RuntimeError("Hết thời gian chờ đăng nhập hoặc chưa vào được trang listings")
+
+
+# 1. Shared helpers
+
+def save_and_set_stop_reason(result: CrawlResult, output_path: str, reason: str) -> None:
+    result.stats.stop_reason = reason
+    save_json(output_path, result.to_dict())
+
+
+def has_reached_requested_count(result: CrawlResult, max_items: Optional[int]) -> bool:
+    if max_items is None:
+        return False
+    return len(result.items) >= max_items
+
+
+def handle_modal_open_failure(
+    page: Page,
+    result: CrawlResult,
+    output_path: str,
+    modal_fail_streak: int,
+    max_modal_fail_streak: int,
+) -> tuple[int, bool]:
+    result.stats.modal_open_fail_count += 1
+    modal_fail_streak += 1
+
+    if is_logged_out(page.url):
+        save_and_set_stop_reason(result, output_path, "redirected_to_login")
+        return modal_fail_streak, True
+
+    if modal_fail_streak >= max_modal_fail_streak:
+        save_and_set_stop_reason(result, output_path, "too_many_modal_failures")
+        return modal_fail_streak, True
+
+    return modal_fail_streak, False
+
+
+def build_card_key(product_name: str, price: str) -> str:
+    return f"{product_name} | {price}"
+
+
+def process_candidate(
+    candidate,
+    detail: DetailExtractor,
+    page: Page,
+    result: CrawlResult,
+    seen_fingerprints: set[str],
+    base_url: str,
+    options: CrawlOptions,
+    modal_fail_streak: int,
+):
+    opened = detail.open_detail_from_card(candidate.clickable)
+
+    if not opened:
+        modal_fail_streak, should_stop = handle_modal_open_failure(
+            page=page,
+            result=result,
+            output_path=options.output_path,
+            modal_fail_streak=modal_fail_streak,
+            max_modal_fail_streak=options.max_modal_fail_streak,
+        )
+        return modal_fail_streak, should_stop, False
+
+    try:
+        raw = detail.extract_modal_data()
+
+        if not raw.product_name:
+            raise Exception("Modal chưa render xong product name")
+
+        record = transform_raw_to_record(raw, base_url=base_url)
+
+        fingerprint = build_fingerprint(
+            listing_link=record.listing_link,
+            main_image=record.main_image,
+            product_name=record.product_name,
+            price=record.price or "",
+            shop_name=record.shop_name or "",
+        )
+
+        if not fingerprint:
+            fingerprint = f"{candidate.product_name} | {candidate.price}"
+
+        if fingerprint in seen_fingerprints:
+            result.stats.duplicate_count += 1
+            return modal_fail_streak, False, False
+
+        seen_fingerprints.add(fingerprint)
+        modal_fail_streak = 0
+
+        if record.is_valid():
+            result.items.append(record)
+            result.stats.valid_count += 1
+
+            if result.stats.valid_count % 6 == 0:
+                save_json(options.output_path, result.to_dict())
+            return modal_fail_streak, False, True
+
+        result.stats.invalid_count += 1
+        return modal_fail_streak, False, False
+
+    except Exception as error:
+        result.stats.extract_fail_count += 1
+        print(f"[CRAWL][EXTRACT_FAIL] {error}")
+        return modal_fail_streak, False, False
+
+    finally:
+        detail.close_modal()
+
+
+# 2. Main crawl flow
 
 def run_crawl(options: CrawlOptions) -> CrawlResult:
     selector_config = load_selector_config()
     base_url = get_site_base_url(selector_config)
     listing_url = get_listing_url(selector_config)
     listing_url_match = get_listing_url_match(selector_config)
-    
+
     result = CrawlResult()
     result.stats.requested_count = options.max_items
-    
+
     seen_fingerprints: set[str] = set()
+    seen_card_keys: set[str] = set()
     empty_rounds = 0
     modal_fail_streak = 0
-    
+
     with sync_playwright() as p:
+        ensure_browser_running(options.connect_url)
         browser = p.chromium.connect_over_cdp(options.connect_url)
-        page = pick_existing_page(browser, base_url)
-        
-        if page is None:
-            raise RuntimeError("Không tìm thấy tab/page nào để crawl")
-        
+        page = ensure_page(browser, base_url)
         page.set_default_timeout(options.page_timeout_ms)
-        
+
+        wait_until_user_ready(
+            page=page,
+            listing_url=listing_url,
+            listing_url_match=listing_url_match,
+        )
+
+        if is_logged_out(page.url):
+            save_and_set_stop_reason(result, options.output_path, "redirected_to_login")
+            return result
+
         if not is_listing_page(page.url, listing_url_match):
-            if listing_url:
-                page.goto(listing_url, wait_until="domcontentloaded")
-            else: 
-                raise RuntimeError("Page hiện tại không phairm listing page")
-        
+            raise RuntimeError("Đã qua bước chờ nhưng page hiện tại vẫn không phải listing page")
+
         listing = ListingCrawler(
             page=page,
             selector_config=selector_config,
@@ -75,113 +294,108 @@ def run_crawl(options: CrawlOptions) -> CrawlResult:
             base_url=base_url,
             modal_timeout_ms=options.modal_timeout_ms,
         )
-        
-        
-        
+
         listing.wait_until_ready(timeout_ms=options.page_timeout_ms)
-        
+
         while True:
-            if options.max_items is not None and len(result.items) >= options.max_items:
+            if is_logged_out(page.url):
+                save_and_set_stop_reason(result, options.output_path, "redirected_to_login")
+                break
+
+            if has_reached_requested_count(result, options.max_items):
                 result.stats.stop_reason = "reached_requested_count"
                 break
+
             cards = listing.get_visible_cards()
-            
+
             if not cards:
                 empty_rounds += 1
                 if empty_rounds >= options.max_empty_rounds:
                     result.stats.stop_reason = "no_visible_cards"
                     break
+
                 listing.scroll_for_new_batch()
                 result.stats.scroll_rounds += 1
+
+                if is_logged_out(page.url):
+                    save_and_set_stop_reason(result, options.output_path, "redirected_to_login")
+                    break
+
                 continue
-            
-            new_item_found_in_found = False
-            
-            for candidate in cards: 
+
+            new_item_found_in_round = False
+
+            for candidate in cards:
                 result.stats.scanned_card_count += 1
-                
-                if options.max_items is not None and len(result.items) >= options.max_items:
+
+                if has_reached_requested_count(result, options.max_items):
                     result.stats.stop_reason = "reached_requested_count"
                     break
-                
+
                 if candidate.clickable is None:
                     continue
-                
-                opened = detail.open_detail_from_card(candidate.clickable)
-                if not opened:
-                    result.stats.modal_open_fail_count += 1
-                    modal_fail_streak += 1
-                    
-                    if modal_fail_streak >= options.max_modal_fail_streak:
-                        result.stats.stop_reason = "too_many_modal_failures"
-                        return result
 
+                card_key = build_card_key(candidate.product_name, candidate.price)
+                if card_key in seen_card_keys:
                     continue
-                try: 
-                    raw = detail.extract_modal_data()
-                    if not raw.product_name:
-                        raise Exception('Modal chưa render xong')
-                    record = transform_raw_to_record(raw, base_url=base_url)
-                    
-                    fingerprint = build_fingerprint(
-                        listing_link=record.listing_link,
-                        main_image=record.main_image,
-                        product_name=record.product_name,
-                        price=record.price or "",
-                        shop_name=record.shop_name or "",
-                    )
-                    
-                    if not fingerprint:
-                        fingerprint = f"{candidate.product_name}|{candidate.price}"
-                    if fingerprint in seen_fingerprints:
-                        result.stats.duplicate_count += 1
-                        continue
-                    
-                    seen_fingerprints.add(fingerprint)
-                    new_item_found_in_found = True
-                    modal_fail_streak = 0
-                    
-                    if record.is_valid():
-                        result.items.append(record)
-                        result.stats.valid_count += 1
-                    else:
-                        result.stats.invalid_count += 1
-                except Exception:
-                    result.stats.extract_fail_count += 1
-                finally:
-                    detail.close_modal()
+                seen_card_keys.add(card_key)
+
+                modal_fail_streak, should_stop, new_item = process_candidate(
+                    candidate=candidate,
+                    detail=detail,
+                    page=page,
+                    result=result,
+                    seen_fingerprints=seen_fingerprints,
+                    base_url=base_url,
+                    options=options,
+                    modal_fail_streak=modal_fail_streak,
+                )
+
+                if should_stop:
+                    return result
+
+                if new_item:
+                    new_item_found_in_round = True
+
             if result.stats.stop_reason:
                 break
-            if new_item_found_in_found:
+
+            if new_item_found_in_round:
                 empty_rounds = 0
-            else :
+            else:
                 empty_rounds += 1
-            
+
             if empty_rounds >= options.max_empty_rounds:
                 result.stats.stop_reason = "no_new_items_after_scroll_rounds"
                 break
-            
+
             before_signature = listing.get_page_signature()
             listing.scroll_for_new_batch()
-            after_signature = listing.get_page_signature()
             result.stats.scroll_rounds += 1
-            
+
+            if is_logged_out(page.url):
+                save_and_set_stop_reason(result, options.output_path, "redirected_to_login")
+                break
+
+            after_signature = listing.get_page_signature()
             if before_signature == after_signature:
                 empty_rounds += 1
-            
+
             if empty_rounds >= options.max_empty_rounds:
                 result.stats.stop_reason = "listing_not_changing"
                 break
+
     save_json(options.output_path, result.to_dict())
     return result
 
+
 if __name__ == "__main__":
     options = CrawlOptions(
-        max_items=42,
+        max_items=24,
         connect_url="http://127.0.0.1:9222",
         output_path="output/product.json",
-    ) 
-    
+    )
+
     result = run_crawl(options)
     print(f"Scanned cards: {result.stats.scanned_card_count}")
     print(f"Valid items: {result.stats.valid_count}")
