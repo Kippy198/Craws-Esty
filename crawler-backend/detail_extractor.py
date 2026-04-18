@@ -165,6 +165,7 @@ class DetailExtractor:
     
     def extract_modal_data(self) -> ListingDetailRaw:
         self.page.wait_for_timeout(1000)
+
         product_name = self._safe_text_from_page(
             self._selectors("detailModal", "productName")
         )
@@ -176,16 +177,9 @@ class DetailExtractor:
         shop_name = self._safe_text_from_page(
             self._selectors("detailModal", "shopName")
         )
+
         sold = self._safe_text_from_page(
             self._selectors("detailModal", "sold")
-        )
-
-        shop_link = normalize_url(
-            self._safe_attr_from_page(
-                self._selectors("detailModal", "shopLink"),
-                "href",
-            ),
-            self.base_url,
         )
 
         main_image = normalize_url(
@@ -204,26 +198,19 @@ class DetailExtractor:
             self.base_url,
         )
 
-        shop_redirect_link = normalize_url(
-            self._safe_attr_from_page(
-                self._selectors("detailModal", "shopRedirectLink"),
-                "href",
-            ),
-            self.base_url,
-        )
-
         breadcrumb_links = self._safe_all_texts_from_page(
             self._selectors("detailModal", "breadcrumbLinks")
         )
+
+        shop_identifier = shop_name
         
         return ListingDetailRaw(
             product_name=product_name,
             price=price or None,
             shop_name=shop_name or None,
-            shop_link=shop_link or None,
+            shop_identifier=shop_identifier or None,
             main_image=main_image,
             listing_link=listing_link,
-            shop_redirect_link=shop_redirect_link or None,
             sold=sold or None,
             breadcrumb_links=breadcrumb_links,
         )

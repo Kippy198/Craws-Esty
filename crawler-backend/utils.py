@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin,quote
 
 #
 # XỬ LÝ TEXT
@@ -23,7 +23,6 @@ def first_non_empty(values: list[Optional[str]]) -> str:
 #
 # XỬ LÝ URL
 #
-
 def normalize_url(url: Optional[str],base_url: str = "") -> str:
     if not url:
         return ""
@@ -34,10 +33,13 @@ def normalize_url(url: Optional[str],base_url: str = "") -> str:
         return urljoin(base_url,url)
     return url
 
-def is_listing_url(url: str, listing_url_includes: str) -> bool:
-    if not url or not listing_url_includes:
-        return False
-    return listing_url_includes in url
+def build_shop_url(base_url: str, shop_identifier: str) -> str:
+    clean_base = (base_url or "").rstrip("/")
+    clean_identifier = normalize_text(shop_identifier)
+    if not clean_base or not clean_identifier:
+        return ""
+    return f"{clean_base}/listings?shop_id={quote(clean_identifier)}"
+
 #
 #  XỬ LÝ CATEGORY 
 #
@@ -65,15 +67,16 @@ def category_to_string(parts: list[str]) -> str:
 # TẠO FINGERPRINT ĐỂ XÁC NHẬN SẢN PHẨM
 #
 def build_fingerprint(
-    listing_link: str = "",
-    main_image: str = "",
     product_name: str = "",
+    main_image: str = "",
     price: str = "",
     shop_name: str = "",
-) -> str: 
+    shop_identifier: str = "",
+) -> str:
     candidates = [
-        listing_link.strip(),
+        shop_identifier.strip() and f"{shop_identifier.strip()}|{product_name.strip()}",
         main_image.strip(),
+
         "|".join(
             [
                 product_name.strip(),
@@ -82,12 +85,12 @@ def build_fingerprint(
             ]
         ).strip("|"),
     ]
-    
+
     for item in candidates:
         if item:
             return item
-    return ""
 
+    return ""
 #
 # FILE OUTPUT
 #

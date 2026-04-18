@@ -8,7 +8,6 @@ from typing import Any, Optional
 class ListingCardPreview:
     product_name: str = ""
     price: Optional[str] = None
-    
     def to_dict(self) -> dict[str,Any]:
         return asdict(self)
 
@@ -18,11 +17,10 @@ class ListingDetailRaw:
     price: Optional[str] = None
     
     shop_name: str = ""
-    shop_link: Optional[str] = None
+    shop_identifier: Optional[str] = None
     
     main_image: str = ""
     listing_link: str = ""
-    shop_redirect_link: Optional[str] = None
     
     sold: Optional[str] = None
     breadcrumb_links: list[str] = field(default_factory=list)
@@ -34,21 +32,19 @@ class ListingDetailRaw:
 class ProductRecord:
     product_name: str = ""
     main_image: str = ""
-    listing_link: str = ""
     category: str = ""
     
     price: Optional[str] = None
     sold: Optional[str] = None
+
     shop_name: Optional[str] = None
-    shop_link: Optional[str] = None
-    
-    breadcrumb_links: list[str] = field(default_factory=list)
-    
+    shop_identifier: Optional[str] = None
+    shop_listing_url: Optional[str] = None
+        
     def is_valid(self) -> bool:
         return bool(
             self.product_name.strip()
             and self.main_image.strip()
-            and self.listing_link.strip()
             and self.category.strip()
         )
     def to_dict(self) -> dict[str, Any]:

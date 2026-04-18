@@ -33,7 +33,7 @@ def ensure_browser_running(connect_url: str) -> None:
 
     print("[BROWSER] Chrome chưa chạy, đang mở...")
     chrome_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    user_data_dir = r"C:\crawler-profile"
+    user_data_dir = r"C:\crawler-profile1"
 
     subprocess.Popen(
         [
@@ -72,20 +72,24 @@ def pick_existing_page(browser: Browser, preferred_base_url: str) -> Optional[Pa
     return None
 
 
-def ensure_page(browser: Browser, preferred_base_url: str) -> Page:
+def ensure_page(browser: Browser, preferred_base_url: str, target_url: str) -> Page:
     page = pick_existing_page(browser, preferred_base_url)
     if page is not None:
+        try:
+            page.goto(target_url, wait_until="domcontentloaded", timeout=10000)
+        except Exception:
+            pass
         return page
 
-    if not browser.contexts:
-        context = browser.new_context()
-    else:
+    if browser.contexts:
         context = browser.contexts[0]
+    else:
+        raise RuntimeError("Không tìm thấy browser context nào để tạo tab crawl")
 
     page = context.new_page()
-    print("[BROWSER] Chưa có tab nào, đã tự tạo tab mới")
+    print("[BROWSER] Đã tạo tab crawl mới")
+    page.goto(target_url, wait_until="domcontentloaded", timeout=10000)
     return page
-
 
 def is_listing_page(url: str, listing_url_match: str) -> bool:
     if not url or not listing_url_match:
@@ -105,9 +109,9 @@ def wait_until_user_ready(
     listing_url_match: str,
     timeout_seconds: int = 300,
     poll_seconds: int = 2,
-) -> bool:
-    print("[WAIT] Đang chờ bạn đăng nhập và vào trang listings...")
-    print(f"[WAIT] Nếu cần, hãy mở trang này sau khi login: {listing_url}")
+) -> Page:
+    print("[WAIT] Đang chờ bạn đăng nhập trên tab crawl...")
+    print(f"[WAIT] Tab crawl đang mở tại: {listing_url}")
 
     deadline = time.time() + timeout_seconds
     last_logged_url = ""
@@ -121,27 +125,11 @@ def wait_until_user_ready(
 
         if is_listing_page(current_url, listing_url_match):
             print("[WAIT] Đã vào đúng listing page, bắt đầu crawl")
-            return True
-
-        if current_url in ("", "about:blank"):
-            try:
-                page.goto(listing_url, wait_until="domcontentloaded", timeout=5000)
-            except Exception:
-                pass
-        elif is_logged_out(current_url):
-            # Đang ở login, tiếp tục chờ user thao tác.
-            pass
-        elif listing_url and "toidispy.com" in current_url and not is_listing_page(current_url, listing_url_match):
-            try:
-                page.goto(listing_url, wait_until="domcontentloaded", timeout=5000)
-            except Exception:
-                pass
+            return page
 
         time.sleep(poll_seconds)
 
-    raise RuntimeError("Hết thời gian chờ đăng nhập hoặc chưa vào được trang listings")
-
-
+    raise RuntimeError("Hết thời gian chờ đăng nhập hoặc chưa quay lại được trang listings")
 # 1. Shared helpers
 
 def save_and_set_stop_reason(result: CrawlResult, output_path: str, reason: str) -> None:
@@ -211,11 +199,11 @@ def process_candidate(
         record = transform_raw_to_record(raw, base_url=base_url)
 
         fingerprint = build_fingerprint(
-            listing_link=record.listing_link,
-            main_image=record.main_image,
             product_name=record.product_name,
+            main_image=record.main_image,
             price=record.price or "",
             shop_name=record.shop_name or "",
+            shop_identifier=record.shop_identifier or "",
         )
 
         if not fingerprint:
@@ -267,10 +255,15 @@ def run_crawl(options: CrawlOptions) -> CrawlResult:
     with sync_playwright() as p:
         ensure_browser_running(options.connect_url)
         browser = p.chromium.connect_over_cdp(options.connect_url)
-        page = ensure_page(browser, base_url)
+
+        page = ensure_page(
+            browser=browser,
+            preferred_base_url=base_url,
+            target_url=listing_url,
+        )
         page.set_default_timeout(options.page_timeout_ms)
 
-        wait_until_user_ready(
+        page = wait_until_user_ready(
             page=page,
             listing_url=listing_url,
             listing_url_match=listing_url_match,
@@ -391,7 +384,7 @@ def run_crawl(options: CrawlOptions) -> CrawlResult:
 
 if __name__ == "__main__":
     options = CrawlOptions(
-        max_items=24,
+        max_items=56,
         connect_url="http://127.0.0.1:9222",
         output_path="output/product.json",
     )
